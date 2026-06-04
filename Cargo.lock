@@ -117,6 +117,7 @@ dependencies = [
  "ash",
  "ash-window",
  "bytemuck",
+ "log",
  "nalgebra",
  "tracing",
  "tracing-subscriber",
