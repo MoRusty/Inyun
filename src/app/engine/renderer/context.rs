@@ -4,21 +4,35 @@ use ash::vk;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
 use std::sync::Arc;
+use tracing::span::Attributes;
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::Window;
 
-pub struct Context {
-    //store the instance and entry so they dont get dropped, we will need them for creating devices and surfaces
-    // store them in the inverse order they were created so they get dropped in the correct order
-    // the entry should be dropped after the instance, and the instance should be dropped after the surface (unsafe fn)
-    surface: vk::SurfaceKHR,
-    surface_extension: ash::khr::surface::Instance,
-    instance: ash::Instance,
-    entry: ash::Entry,
-    // debug utils loader and messenger to receive validation/debug callbacks
-    debug_utils_loader: DebugUtils,
-    debug_messenger: vk::DebugUtilsMessengerEXT,
-    window: Arc<Window>,
+// 3070 queue families, stick with 0 for now, use 1 and 2 late game optimisations
+// 0	GRAPHICS + COMPUTE + TRANSFER + SPARSE for graphics
+// 1	TRANSFER + SPARSE for pure transfer?
+// 2	COMPUTE + TRANSFER + SPARSE for compute and presentation
+
+#[derive(Debug)]
+pub struct QueueFamily {
+    pub index: u32,
+    pub properties: vk::QueueFamilyProperties,
+}
+
+pub struct QueueFamilies{
+    pub graphics: QueueFamily,
+    pub present: QueueFamily,
+    pub compute: QueueFamily,
+    pub transfer: QueueFamily,
+}
+
+#[derive(Debug)]
+pub struct PhysicalDevice {
+    pub handle: vk::PhysicalDevice,
+    pub properties: vk::PhysicalDeviceProperties,
+    pub features: vk::PhysicalDeviceFeatures,
+    pub memory_properties: vk::PhysicalDeviceMemoryProperties,
+    pub queue_families: Vec<QueueFamily>,
 }
 
 unsafe extern "system" fn vulkan_debug_callback(
@@ -46,13 +60,37 @@ unsafe extern "system" fn vulkan_debug_callback(
     vk::FALSE
 }
 
+//can use dynamic callback instead of static, research this topic more later,
+// but for now just use a static callback function
+type QueueFamilyPicker = fn(Vec<PhysicalDevice>) -> Result<(PhysicalDevice, QueueFamily)>;
+struct ContextAttributes {
+    window: Arc<Window>,
+    queue_family_picker: QueueFamilyPicker,
+}
+
+
+pub struct Context {
+    //store the instance and entry so they dont get dropped, we will need them for creating devices and surfaces
+    // store them in the inverse order they were created so they get dropped in the correct order
+    // the entry should be dropped after the instance, and the instance should be dropped after the surface (unsafe fn)
+    pub surface: vk::SurfaceKHR,
+    pub surface_extension: ash::khr::surface::Instance,
+    pub instance: ash::Instance,
+    pub entry: ash::Entry,
+    // debug utils loader and messenger to receive validation/debug callbacks
+    pub debug_utils_loader: DebugUtils,
+    pub debug_messenger: vk::DebugUtilsMessengerEXT,
+    pub attributes: ContextAttributes,
+}
+
+
 impl Context {
-    pub fn new(window: Arc<Window>) -> Result<Self> {
+    pub fn new(attributes: ContextAttributes) -> Result<Self> {
         unsafe {
             let entry = ash::Entry::load()?;
 
-            let raw_display_handle = window.display_handle()?.as_raw();
-            let raw_window_handle = window.window_handle()?.as_raw();
+            let raw_display_handle = attributes.window.display_handle()?.as_raw();
+            let raw_window_handle = attributes.window.window_handle()?.as_raw();
 
             //enabling validation layers
             let validation_layer_names = [CString::new("VK_LAYER_KHRONOS_validation")?];
@@ -107,9 +145,48 @@ impl Context {
                 None,
             )?;
 
-            let physical_devices = instance.enumerate_physical_devices()?;
 
-            dbg!(physical_devices);
+            //dbg!(physical_devices);
+            //todo - filter physical devices based on features and properties, for now just
+            // take the first one and create a logical device from it,
+            // but we will need to check for presentation support and other features later on
+            let mut physical_devices = instance.enumerate_physical_devices()?.into_iter().map(|handle| {
+                let properties = instance.get_physical_device_properties(handle);
+                let features = instance.get_physical_device_features(handle);
+                let memory_properties =
+                    instance.get_physical_device_memory_properties(handle);
+
+                let queue_family_properties =
+                    instance.get_physical_device_queue_family_properties(handle);
+
+                let queue_families = queue_family_properties
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, properties)| QueueFamily {
+                        index: index as u32,
+                        properties, //same properties for all queue families, just different flags and counts
+                    })
+                    .collect::<Vec<_>>();
+
+                PhysicalDevice {
+                    handle,
+                    properties,
+                    features,
+                    memory_properties,
+                    queue_families,
+                }
+            }).collect::<Vec<_>>();
+
+           // println!("{:#?}", physical_devices);
+            //retain the devices that have surface support (can present to a surface, which is required for rendering to a window)
+            physical_devices.retain(|physical_device| {
+               surface_extension.get_physical_device_surface_support(physical_device.handle,0, surface).unwrap_or(false)
+            });
+            //println!("{:#?}", physical_devices);
+
+            let (physical_device, queue_family) = (attributes.queue_family_picker)(physical_devices)?;
+
+
 
             Ok(Self {
                 surface,
@@ -118,7 +195,7 @@ impl Context {
                 entry,
                 debug_utils_loader,
                 debug_messenger,
-                window,
+                attributes,
             })
         }
     }
