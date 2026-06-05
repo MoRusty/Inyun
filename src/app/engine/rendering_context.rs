@@ -1,3 +1,4 @@
+use crate::app::engine::rendering_context;
 use anyhow::Result;
 use ash::ext::debug_utils::Instance as DebugUtils;
 use ash::vk;
@@ -7,7 +8,6 @@ use std::os::raw::c_void;
 use std::sync::Arc;
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::Window;
-
 // 3070 queue families, stick with 0 for now, use 1 and 2 late game optimisations
 // 0	GRAPHICS + COMPUTE + TRANSFER + SPARSE for graphics
 // 1	TRANSFER + SPARSE for pure transfer?
@@ -64,12 +64,12 @@ unsafe extern "system" fn vulkan_debug_callback(
 //can use dynamic callback instead of static, research this topic more later,
 // but for now just use a static callback function
 type QueueFamilyPicker = fn(Vec<PhysicalDevice>) -> Result<(PhysicalDevice, QueueFamilies)>;
-pub struct ContextAttributes {
+pub struct RenderingContextAttributes {
     pub window: Arc<Window>,
     pub queue_family_picker: QueueFamilyPicker,
 }
 
-pub struct Context {
+pub struct RenderingContext {
     //store the instance and entry so they don't get dropped, we will need them for creating devices and surfaces
     // store them in the inverse order they were created so they get dropped in the correct order
     // the entry should be dropped after the instance, and the instance should be dropped after the surface (unsafe fn)
@@ -85,11 +85,11 @@ pub struct Context {
     // debug utils loader and messenger to receive validation/debug callbacks
     pub debug_utils_loader: DebugUtils,
     pub debug_messenger: vk::DebugUtilsMessengerEXT,
-    pub attributes: ContextAttributes,
+    pub attributes: RenderingContextAttributes,
 }
 
-impl Context {
-    pub fn new(attributes: ContextAttributes) -> Result<Self> {
+impl RenderingContext {
+    pub fn new(attributes: RenderingContextAttributes) -> Result<Self> {
         unsafe {
             let entry = ash::Entry::load()?;
 
@@ -258,9 +258,43 @@ impl Context {
             })
         }
     }
+    pub fn pick_discrete_gpu(
+        physical_devices: Vec<PhysicalDevice>,
+    ) -> Result<(PhysicalDevice, QueueFamilies)> {
+        // Try to find a discrete GPU first
+        let best_device = physical_devices
+            .iter() //
+            .find(|d| d.properties.device_type == vk::PhysicalDeviceType::DISCRETE_GPU)
+            .or_else(|| physical_devices.first()) //
+            .ok_or_else(|| anyhow::anyhow!("No physical devices found"))?
+            .clone();
+
+        // Helpful for debugging when running elsewhere
+        log::debug!("Selected device: {:?}", best_device.properties.device_type);
+
+        // Just use the first queue family that supports graphics
+        let graphics_family = best_device
+            .queue_families
+            .iter()
+            .find(|qf| qf.properties.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+            .ok_or_else(|| anyhow::anyhow!("No graphics queue family"))?
+            .clone();
+
+        // Use the same queue family for everything (simple but works)
+        //todo change it so that the best queue family is used for each type of queue (graphics, present, transfer, compute)
+        Ok((
+            best_device,
+            rendering_context::QueueFamilies {
+                graphics: graphics_family.clone(),
+                present: graphics_family.clone(),
+                transfer: graphics_family.clone(),
+                compute: graphics_family.clone(),
+            },
+        ))
+    }
 }
 
-impl Drop for Context {
+impl Drop for RenderingContext {
     fn drop(&mut self) {
         unsafe {
             // destroy messenger before destroying instance
