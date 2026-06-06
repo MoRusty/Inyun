@@ -1,10 +1,14 @@
+mod swapchain;
+
 use anyhow::Result;
 use std::sync::Arc;
 use winit::window::Window;
 
+use crate::app::engine::renderer::swapchain::Swapchain;
 use crate::app::engine::rendering_context::RenderingContext;
 
 pub struct Renderer {
+    swapchain: Swapchain,
     context: Arc<RenderingContext>,
 }
 //alot in this Renderer needs to be improved
@@ -18,6 +22,8 @@ impl Renderer {
         //     queue_family_picker: Self::pick_discrete_gpu,
         // })?;
 
-        Ok(Self { context })
+        let mut swapchain = Swapchain::new(context.clone(), window.clone())?;
+        swapchain.create()?;
+        Ok(Self { swapchain, context })
     }
 }

@@ -1,4 +1,7 @@
 //libraries i plan to use, winit, ash, tracing, anyhow, gpu allocator, tokio?, pallete?, rapier physics?, nalgerbra?
+//todo: add a way to specify which gpu to use, and also a way to specify which queue family to use for each type of queue (graphics, compute, transfer)
+//todo: change all the pub functions if its internal crate use only to pub(crate) or private, only expose what needs to be exposed
+//todo: change 2d to 3d
 
 use winit::event_loop::EventLoop;
 

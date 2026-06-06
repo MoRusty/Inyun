@@ -1,7 +1,9 @@
 use crate::app::engine::rendering_context;
 use anyhow::Result;
 use ash::ext::debug_utils::Instance as DebugUtils;
+use ash::prelude::VkResult;
 use ash::vk;
+use ash::vk::{ImageView, SwapchainKHR};
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_void;
@@ -36,6 +38,13 @@ pub struct PhysicalDevice {
     pub queue_families: Vec<QueueFamily>,
 }
 
+pub struct Surface {
+    pub handle: vk::SurfaceKHR,
+    pub capabilities: vk::SurfaceCapabilitiesKHR,
+    pub formats: Vec<vk::SurfaceFormatKHR>,
+    pub present_modes: Vec<vk::PresentModeKHR>,
+}
+
 unsafe extern "system" fn vulkan_debug_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
     message_types: vk::DebugUtilsMessageTypeFlagsEXT,
@@ -65,6 +74,7 @@ unsafe extern "system" fn vulkan_debug_callback(
 // but for now just use a static callback function
 type QueueFamilyPicker = fn(Vec<PhysicalDevice>) -> Result<(PhysicalDevice, QueueFamilies)>;
 pub struct RenderingContextAttributes {
+    //temp used for compatibility check of physical devices
     pub window: Arc<Window>,
     pub queue_family_picker: QueueFamilyPicker,
 }
@@ -75,10 +85,10 @@ pub struct RenderingContext {
     // the entry should be dropped after the instance, and the instance should be dropped after the surface (unsafe fn)
     pub queues: Vec<vk::Queue>,
     pub device: ash::Device,
+    pub swapchain_extension: ash::khr::swapchain::Device,
     pub queue_family_indices: HashSet<u32>,
     pub queue_families: QueueFamilies,
     pub physical_device: PhysicalDevice,
-    pub surface: vk::SurfaceKHR,
     pub surface_extension: ash::khr::surface::Instance,
     pub instance: ash::Instance,
     pub entry: ash::Entry,
@@ -141,7 +151,7 @@ impl RenderingContext {
             //above loads the Vulkan library and instance but not any extensions,
             // we will need to load the surface extension and create a surface for the window
             let surface_extension = ash::khr::surface::Instance::new(&entry, &instance);
-            let surface = ash_window::create_surface(
+            let dummy_surface = ash_window::create_surface(
                 &entry,
                 &instance,
                 raw_display_handle,
@@ -187,10 +197,13 @@ impl RenderingContext {
             //retain the devices that have surface support (can present to a surface, which is required for rendering to a window)
             physical_devices.retain(|physical_device| {
                 surface_extension
-                    .get_physical_device_surface_support(physical_device.handle, 0, surface)
+                    .get_physical_device_surface_support(physical_device.handle, 0, dummy_surface)
                     .unwrap_or(false)
             });
             //println!("{:#?}", physical_devices);
+
+            //dummy surface to get device compatibility
+            surface_extension.destroy_surface(dummy_surface, None);
 
             let (physical_device, queue_families) =
                 (attributes.queue_family_picker)(physical_devices)?;
@@ -234,6 +247,8 @@ impl RenderingContext {
                 None,
             )?;
 
+            let swapchain_extension = ash::khr::swapchain::Device::new(&instance, &device);
+
             let queues = queue_family_indices
                 .iter()
                 .copied()
@@ -245,10 +260,10 @@ impl RenderingContext {
             Ok(Self {
                 queues,
                 device,
+                swapchain_extension,
                 queue_family_indices,
                 queue_families,
                 physical_device,
-                surface,
                 surface_extension,
                 instance,
                 entry,
@@ -292,6 +307,66 @@ impl RenderingContext {
             },
         ))
     }
+
+    //get all surface info and store it in struct, saves having the individual functions
+    pub unsafe fn create_surface(&self, window: &Window) -> Result<Surface> {
+        let raw_display_handle = window.display_handle()?.as_raw();
+        let raw_window_handle = window.window_handle()?.as_raw();
+
+        let handle = ash_window::create_surface(
+            &self.entry,
+            &self.instance,
+            raw_display_handle,
+            raw_window_handle,
+            None,
+        )?;
+
+        let capabilities = self
+            .surface_extension
+            .get_physical_device_surface_capabilities(self.physical_device.handle, handle)?;
+
+        let formats = self
+            .surface_extension
+            .get_physical_device_surface_formats(self.physical_device.handle, handle)?;
+
+        let present_modes = self
+            .surface_extension
+            .get_physical_device_surface_present_modes(self.physical_device.handle, handle)?;
+
+        Ok(Surface {
+            handle,
+            capabilities,
+            formats,
+            present_modes,
+        })
+    }
+
+    //todo come back to this
+    pub fn create_image_view(
+        &self,
+        image: vk::Image,
+        format: vk::Format,
+        aspect_mask: vk::ImageAspectFlags,
+    ) -> Result<vk::ImageView> {
+        let image_view = unsafe {
+            self.device.create_image_view(
+                &vk::ImageViewCreateInfo::default()
+                    .image(image)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(format)
+                    .subresource_range(
+                        vk::ImageSubresourceRange::default()
+                            .aspect_mask(aspect_mask)
+                            .base_mip_level(0)
+                            .level_count(1)
+                            .base_array_layer(0)
+                            .layer_count(1),
+                    ),
+                None,
+            )
+        }?;
+        Ok(image_view)
+    }
 }
 
 impl Drop for RenderingContext {
@@ -302,8 +377,6 @@ impl Drop for RenderingContext {
                 .destroy_debug_utils_messenger(self.debug_messenger, None);
             //destroy device before surface and instance
             self.device.destroy_device(None);
-
-            self.surface_extension.destroy_surface(self.surface, None);
             self.instance.destroy_instance(None);
         }
     }
