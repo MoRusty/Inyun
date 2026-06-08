@@ -3,9 +3,10 @@ use anyhow::Result;
 use ash::ext::debug_utils::Instance as DebugUtils;
 use ash::prelude::VkResult;
 use ash::vk;
-use ash::vk::{ImageView, SwapchainKHR};
+use ash::vk::{ImageView, ShaderModule, SwapchainKHR};
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
+use std::io;
 use std::os::raw::c_void;
 use std::sync::Arc;
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -367,8 +368,111 @@ impl RenderingContext {
         }?;
         Ok(image_view)
     }
-}
 
+    pub fn create_shader_module(&self, code: &[u8]) -> Result<vk::ShaderModule> {
+        let mut code = io::Cursor::new(code);
+        let code = ash::util::read_spv(&mut code)?;
+        let create_info = vk::ShaderModuleCreateInfo::default().code(&code);
+        let shader_module = unsafe { self.device.create_shader_module(&create_info, None) }?;
+        Ok(shader_module)
+    }
+
+    pub fn create_graphics_pipeline(
+        &self,
+        vertex: vk::ShaderModule,
+        fragment: vk::ShaderModule,
+        swapchain_extent: vk::Extent2D,
+        swapchain_format: vk::Format,
+        pipeline_layout: vk::PipelineLayout,
+        pipeline_cache: vk::PipelineCache,
+    ) -> Result<vk::Pipeline> {
+        //todo - research graphics pipeline creation and how to make it more efficient, currently just creating a basic pipeline with hardcoded values for everything except the shaders and pipeline layout
+        let vertex_stage = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(vertex)
+            .name(CStr::from_bytes_with_nul(b"main\0")?);
+
+        let fragment_stage = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(fragment)
+            .name(CStr::from_bytes_with_nul(b"main\0")?);
+
+        let stages = [vertex_stage, fragment_stage];
+
+        let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
+
+        let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::default()
+            .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+
+        // using dynamic viewport and scissor states, so we don't need to specify them here, but we still need to specify the counts
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+
+        let dynamic_state_info =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let rasterization_state = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .cull_mode(vk::CullModeFlags::NONE)
+            .front_face(vk::FrontFace::CLOCKWISE)
+            .line_width(1.0);
+
+        let multisample_state = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        let color_blend_attachment = vk::PipelineColorBlendAttachmentState {
+            blend_enable: vk::FALSE,
+            src_color_blend_factor: vk::BlendFactor::ONE,
+            dst_color_blend_factor: vk::BlendFactor::ZERO,
+            color_blend_op: vk::BlendOp::ADD,
+            src_alpha_blend_factor: vk::BlendFactor::ONE,
+            dst_alpha_blend_factor: vk::BlendFactor::ZERO,
+            alpha_blend_op: vk::BlendOp::ADD,
+            color_write_mask: vk::ColorComponentFlags::RGBA,
+        };
+
+        let binding = [color_blend_attachment];
+        let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
+            .logic_op_enable(false)
+            .logic_op(vk::LogicOp::COPY)
+            .attachments(&binding);
+
+        let color_attachment_formats = [swapchain_format];
+
+        //dynamic
+        let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
+            .color_attachment_formats(&color_attachment_formats)
+            //.depth_attachment_format(vk::Format::D32_SFLOAT)
+            //.stencil_attachment_format(vk::Format::D32_SFLOAT)
+        ;
+
+        let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(&stages)
+            .vertex_input_state(&vertex_input_state)
+            .input_assembly_state(&input_assembly_state)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterization_state)
+            .multisample_state(&multisample_state)
+            .color_blend_state(&color_blend_state)
+            .layout(pipeline_layout)
+            .render_pass(vk::RenderPass::null()) // using dynamic rendering, so no render pass
+            .dynamic_state(&dynamic_state_info)
+            .push_next(&mut rendering_info);
+
+        let pipeline = unsafe {
+            self.device
+                .create_graphics_pipelines(pipeline_cache, &[pipeline_info], None)
+        }
+        .map_err(|(_, err)| err)?
+        .into_iter()
+        .next()
+        .unwrap();
+        Ok(pipeline)
+    }
+}
 impl Drop for RenderingContext {
     fn drop(&mut self) {
         unsafe {

@@ -117,10 +117,12 @@ impl Swapchain {
         Ok(())
     }
 
-    pub(crate) fn create(&mut self) -> Result<()> {
+    pub fn create(&mut self) -> Result<()> {
         self.recreate_swapchain(vk::SwapchainKHR::null())
     }
 
+    //todo - does this crash if it was resized to 0 manually by the user? probably, need to handle that case better, maybe just ignore resize events if the size is 0,
+    // and then try to recreate the swapchain on the next render loop iteration, and if it still fails, then just keep ignoring resize events until it succeeds?
     pub fn resize(&mut self) -> Result<()> {
         let size = self.window.inner_size();
         self.extent = vk::Extent2D {
