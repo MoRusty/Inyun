@@ -2,8 +2,7 @@ mod swapchain;
 
 use anyhow::Result;
 use ash::vk;
-use ash::vk::{Rect2D, ShaderModule};
-use std::path::Path;
+use ash::vk::ShaderModule;
 use std::sync::Arc;
 use winit::window::Window;
 
@@ -15,7 +14,6 @@ const SHADERS_DIR: &str = "resources/shaders";
 struct Frame {
     command_buffer: vk::CommandBuffer,
     image_available_semaphore: vk::Semaphore,
-    render_finished_semaphore: vk::Semaphore,
     in_flight_fence: vk::Fence,
 }
 
@@ -23,6 +21,7 @@ pub struct Renderer {
     in_flight_frames_count: usize,
     frame_index: usize,
     frames: Vec<Frame>,
+    render_finished_semaphores: Vec<vk::Semaphore>,
     command_pool: vk::CommandPool,
     pipeline_layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
@@ -84,9 +83,6 @@ impl Renderer {
                     let image_available_semaphore = context
                         .device
                         .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?;
-                    let render_finished_semaphore = context
-                        .device
-                        .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?;
                     let in_flight_fence = context.device.create_fence(
                         &vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED),
                         None,
@@ -94,16 +90,25 @@ impl Renderer {
                     Ok(Frame {
                         command_buffer,
                         image_available_semaphore,
-                        render_finished_semaphore,
                         in_flight_fence,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
 
+            // Create render_finished_semaphores for each swapchain image
+            let mut render_finished_semaphores = Vec::new();
+            for _ in 0..swapchain.images.len() {
+                let semaphore = context
+                    .device
+                    .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)?;
+                render_finished_semaphores.push(semaphore);
+            }
+
             Ok(Self {
                 in_flight_frames_count,
                 frame_index: 0,
                 frames,
+                render_finished_semaphores,
                 command_pool,
                 pipeline_layout,
                 pipeline,
@@ -220,13 +225,15 @@ impl Renderer {
                     .command_buffers(&[frame.command_buffer])
                     .wait_semaphores(&[frame.image_available_semaphore])
                     .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
-                    .signal_semaphores(&[frame.render_finished_semaphore])],
+                    .signal_semaphores(&[self.render_finished_semaphores[image_index as usize]])],
                 frame.in_flight_fence,
             )?;
 
             //present
-            self.swapchain
-                .present(image_index, frame.render_finished_semaphore)?;
+            self.swapchain.present(
+                image_index,
+                self.render_finished_semaphores[image_index as usize],
+            )?;
 
             //in flight frames are set to one, will need to cycle through if more than one
             //self.frame_index = (self.frame_index + 1) % self.in_flight_frames_count;
@@ -239,6 +246,18 @@ impl Renderer {
 impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe {
+            self.context.device.device_wait_idle().unwrap();
+            for &semaphore in &self.render_finished_semaphores {
+                self.context.device.destroy_semaphore(semaphore, None);
+            }
+            for frame in &self.frames {
+                self.context
+                    .device
+                    .destroy_semaphore(frame.image_available_semaphore, None);
+                self.context
+                    .device
+                    .destroy_fence(frame.in_flight_fence, None);
+            }
             self.context
                 .device
                 .destroy_command_pool(self.command_pool, None);

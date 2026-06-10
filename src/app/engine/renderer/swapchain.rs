@@ -1,7 +1,6 @@
 use crate::app::engine::rendering_context::{RenderingContext, Surface};
 use anyhow::Result;
 use ash::vk;
-use ash::vk::Semaphore;
 use std::sync::Arc;
 use winit::window::Window;
 
@@ -91,6 +90,9 @@ impl Swapchain {
 
         // Cleanup old if it existed
         if old_swapchain != vk::SwapchainKHR::null() {
+            unsafe {
+                self.context.device.device_wait_idle()?;
+            }
             for image_view in self.image_views.drain(..) {
                 unsafe {
                     self.context.device.destroy_image_view(image_view, None);
