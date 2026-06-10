@@ -68,7 +68,7 @@ impl Renderer {
                 None,
             )?;
 
-            let in_flight_frames_count = 1;
+            let in_flight_frames_count = 2;
 
             let command_buffers = context.device.allocate_command_buffers(
                 &vk::CommandBufferAllocateInfo::default()
@@ -119,7 +119,9 @@ impl Renderer {
     }
 
     pub fn resize(&mut self) -> Result<()> {
-        self.swapchain.resize()
+        //self.swapchain.resize()
+        self.swapchain.is_dirty = true;
+        Ok(())
     }
 
     pub fn render(&mut self) -> Result<()> {

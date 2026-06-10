@@ -14,7 +14,7 @@ pub struct Swapchain {
     surface: Surface,
     window: Arc<Window>,
     context: Arc<RenderingContext>,
-    is_dirty: bool,
+    pub is_dirty: bool,
 }
 
 impl Swapchain {
