@@ -1,6 +1,7 @@
 use crate::app::engine::rendering_context::{RenderingContext, Surface};
 use anyhow::Result;
 use ash::vk;
+use ash::vk::Semaphore;
 use std::sync::Arc;
 use winit::window::Window;
 
@@ -8,12 +9,13 @@ pub struct Swapchain {
     pub desired_image_count: u32,
     pub format: vk::Format,
     pub extent: vk::Extent2D,
-    image_views: Vec<vk::ImageView>,
-    images: Vec<vk::Image>,
+    pub image_views: Vec<vk::ImageView>,
+    pub images: Vec<vk::Image>,
     handle: vk::SwapchainKHR,
     surface: Surface,
     window: Arc<Window>,
     context: Arc<RenderingContext>,
+    is_dirty: bool,
 }
 
 impl Swapchain {
@@ -62,6 +64,7 @@ impl Swapchain {
             surface,
             window,
             context,
+            is_dirty: true,
         })
     }
 
@@ -131,6 +134,41 @@ impl Swapchain {
         };
         let old = self.handle;
         self.recreate_swapchain(old)
+    }
+
+    pub fn acquire_next_image(&mut self, image_available_semaphore: vk::Semaphore) -> Result<u32> {
+        let (image_index, is_suboptimal) = unsafe {
+            self.context.swapchain_extension.acquire_next_image(
+                self.handle,
+                u64::MAX,
+                image_available_semaphore,
+                vk::Fence::null(),
+            )?
+        };
+        if is_suboptimal {
+            self.is_dirty = true;
+        }
+        Ok(image_index)
+    }
+
+    pub fn present(
+        &mut self,
+        image_index: u32,
+        render_finished_semaphore: vk::Semaphore,
+    ) -> Result<()> {
+        let is_suboptimal = unsafe {
+            self.context.swapchain_extension.queue_present(
+                self.context.queues[self.context.queue_families.present.index as usize],
+                &vk::PresentInfoKHR::default()
+                    .wait_semaphores(&[render_finished_semaphore])
+                    .swapchains(&[self.handle])
+                    .image_indices(&[image_index]), // idiomatic version of std::slice::from_ref(&image_index)
+            )
+        }?;
+        if is_suboptimal {
+            self.is_dirty = true;
+        }
+        Ok(())
     }
 }
 

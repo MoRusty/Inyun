@@ -39,6 +39,14 @@ pub struct PhysicalDevice {
     pub queue_families: Vec<QueueFamily>,
 }
 
+#[derive(Clone, Copy)]
+pub struct ImageLayoutState {
+    pub access_mask: vk::AccessFlags,
+    pub layout: vk::ImageLayout,
+    pub stage_mask: vk::PipelineStageFlags,
+    pub queue_family: u32,
+}
+
 pub struct Surface {
     pub handle: vk::SurfaceKHR,
     pub capabilities: vk::SurfaceCapabilitiesKHR,
@@ -447,7 +455,7 @@ impl RenderingContext {
             .color_attachment_formats(&color_attachment_formats)
             //.depth_attachment_format(vk::Format::D32_SFLOAT)
             //.stencil_attachment_format(vk::Format::D32_SFLOAT)
-        ;
+            ;
 
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&stages)
@@ -471,6 +479,65 @@ impl RenderingContext {
         .next()
         .unwrap();
         Ok(pipeline)
+    }
+
+    pub fn transition_image_layout(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        image: vk::Image,
+        old_layout: ImageLayoutState,
+        new_layout: ImageLayoutState,
+        aspect_mask: vk::ImageAspectFlags,
+    ) {
+        unsafe {
+            self.device.cmd_pipeline_barrier(
+                command_buffer,
+                old_layout.stage_mask,
+                new_layout.stage_mask,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[vk::ImageMemoryBarrier::default()
+                    .src_access_mask(old_layout.access_mask)
+                    .dst_access_mask(new_layout.access_mask)
+                    .old_layout(old_layout.layout)
+                    .new_layout(new_layout.layout)
+                    .src_queue_family_index(old_layout.queue_family)
+                    .dst_queue_family_index(new_layout.queue_family)
+                    .image(image)
+                    .subresource_range(
+                        vk::ImageSubresourceRange::default()
+                            .aspect_mask(aspect_mask)
+                            .base_mip_level(0)
+                            .level_count(1)
+                            .base_array_layer(0)
+                            .layer_count(1),
+                    )],
+            )
+        }
+    }
+
+    pub fn begin_rendering(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        image_view: vk::ImageView,
+        clear_color: vk::ClearColorValue,
+        render_area: vk::Rect2D,
+    ) {
+        unsafe {
+            self.device.cmd_begin_rendering(
+                command_buffer,
+                &vk::RenderingInfo::default()
+                    .layer_count(1)
+                    .color_attachments(&[vk::RenderingAttachmentInfo::default()
+                        .image_view(image_view)
+                        .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                        .clear_value(vk::ClearValue { color: clear_color })
+                        .load_op(vk::AttachmentLoadOp::CLEAR)
+                        .store_op(vk::AttachmentStoreOp::STORE)])
+                    .render_area(render_area),
+            );
+        }
     }
 }
 impl Drop for RenderingContext {
