@@ -1,6 +1,6 @@
-use winit::{application::ApplicationHandler, window::WindowAttributes};
-
 use crate::app::engine::Engine;
+use winit::event_loop::ActiveEventLoop;
+use winit::{application::ApplicationHandler, window::WindowAttributes};
 
 mod engine;
 
@@ -30,6 +30,13 @@ impl ApplicationHandler for App {
     ) {
         if let Some(engine) = self.engine.as_mut() {
             engine.window_event(event_loop, window_id, event);
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // request redraw
+        if let Some(engine) = self.engine.as_mut() {
+            engine.request_redraw();
         }
     }
 

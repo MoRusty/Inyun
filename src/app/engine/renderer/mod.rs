@@ -159,28 +159,28 @@ impl Renderer {
                 vk::ImageAspectFlags::COLOR,
             );
 
-            //transition image layout from color attachment to present
-            self.context.transition_image_layout(
-                frame.command_buffer,
-                self.swapchain.images[image_index as usize],
-                renderable_image_state,
-                ImageLayoutState {
-                    layout: vk::ImageLayout::PRESENT_SRC_KHR,
-                    access_mask: vk::AccessFlags::empty(),
-                    stage_mask: vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                    queue_family: vk::QUEUE_FAMILY_IGNORED,
-                },
-                vk::ImageAspectFlags::COLOR,
-            );
-
             //draw here
             self.context.begin_rendering(
                 frame.command_buffer,
-                self.swapchain.image_views[self.frame_index],
+                self.swapchain.image_views[image_index as usize],
                 vk::ClearColorValue {
                     float32: [0.0, 0.0, 0.0, 1.0],
                 },
                 vk::Rect2D::default().extent(self.swapchain.extent),
+            );
+
+            self.context.device.cmd_set_viewport(
+                frame.command_buffer,
+                0,
+                &[vk::Viewport::default()
+                    .width(self.swapchain.extent.width as f32)
+                    .height(self.swapchain.extent.height as f32)],
+            );
+
+            self.context.device.cmd_set_scissor(
+                frame.command_buffer,
+                0,
+                &[vk::Rect2D::default().extent(self.swapchain.extent)],
             );
 
             self.context.device.cmd_bind_pipeline(
@@ -194,6 +194,20 @@ impl Renderer {
                 .cmd_draw(frame.command_buffer, 3, 1, 0, 0);
 
             self.context.device.cmd_end_rendering(frame.command_buffer);
+
+            //transition image layout from color attachment to present
+            self.context.transition_image_layout(
+                frame.command_buffer,
+                self.swapchain.images[image_index as usize],
+                renderable_image_state,
+                ImageLayoutState {
+                    layout: vk::ImageLayout::PRESENT_SRC_KHR,
+                    access_mask: vk::AccessFlags::empty(),
+                    stage_mask: vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                    queue_family: vk::QUEUE_FAMILY_IGNORED,
+                },
+                vk::ImageAspectFlags::COLOR,
+            );
 
             self.context
                 .device
@@ -225,6 +239,9 @@ impl Renderer {
 impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe {
+            self.context
+                .device
+                .destroy_command_pool(self.command_pool, None);
             self.context.device.destroy_pipeline(self.pipeline, None);
             self.context
                 .device

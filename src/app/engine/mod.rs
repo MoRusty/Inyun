@@ -65,6 +65,17 @@ impl Engine {
                     renderer.resize().unwrap()
                 }
             }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                if let Some(renderer) = self.renderers.get_mut(&window_id) {
+                    renderer.resize().unwrap()
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                if let Some(renderer) = self.renderers.get_mut(&window_id) {
+                    renderer.render().unwrap()
+                }
+            }
+
             _ => {}
         }
     }
@@ -80,5 +91,11 @@ impl Engine {
         let renderer = Renderer::new(self.rendering_context.clone(), window)?;
         self.renderers.insert(window_id, renderer);
         Ok(window_id)
+    }
+
+    pub fn request_redraw(&mut self) {
+        for window in self.windows.values() {
+            window.request_redraw();
+        }
     }
 }
