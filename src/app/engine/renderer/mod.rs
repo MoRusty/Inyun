@@ -1,3 +1,4 @@
+//todo: go back over the wait - signal semaphoes. make sure the correct stage mask is set.
 mod swapchain;
 
 use anyhow::Result;
@@ -147,8 +148,8 @@ impl Renderer {
 
             let renderable_image_state = ImageLayoutState {
                 layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-                stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
                 queue_family: vk::QUEUE_FAMILY_IGNORED,
             };
 
@@ -158,15 +159,13 @@ impl Renderer {
                 self.swapchain.images[image_index as usize],
                 ImageLayoutState {
                     layout: vk::ImageLayout::UNDEFINED,
-                    access_mask: vk::AccessFlags::empty(),
-                    stage_mask: vk::PipelineStageFlags::TOP_OF_PIPE,
+                    access_mask: vk::AccessFlags2::NONE,
+                    stage_mask: vk::PipelineStageFlags2::NONE,
                     queue_family: vk::QUEUE_FAMILY_IGNORED,
                 },
                 renderable_image_state,
-                vk::ImageAspectFlags::COLOR,
             );
 
-            //draw here
             self.context.begin_rendering(
                 frame.command_buffer,
                 self.swapchain.image_views[image_index as usize],
@@ -175,30 +174,7 @@ impl Renderer {
                 },
                 vk::Rect2D::default().extent(self.swapchain.extent),
             );
-
-            self.context.device.cmd_set_viewport(
-                frame.command_buffer,
-                0,
-                &[vk::Viewport::default()
-                    .width(self.swapchain.extent.width as f32)
-                    .height(self.swapchain.extent.height as f32)],
-            );
-
-            self.context.device.cmd_set_scissor(
-                frame.command_buffer,
-                0,
-                &[vk::Rect2D::default().extent(self.swapchain.extent)],
-            );
-
-            self.context.device.cmd_bind_pipeline(
-                frame.command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.pipeline,
-            );
-
-            self.context
-                .device
-                .cmd_draw(frame.command_buffer, 3, 1, 0, 0);
+            self.draw(frame.command_buffer);
 
             self.context.device.cmd_end_rendering(frame.command_buffer);
 
@@ -209,11 +185,10 @@ impl Renderer {
                 renderable_image_state,
                 ImageLayoutState {
                     layout: vk::ImageLayout::PRESENT_SRC_KHR,
-                    access_mask: vk::AccessFlags::empty(),
-                    stage_mask: vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                    access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
                     queue_family: vk::QUEUE_FAMILY_IGNORED,
                 },
-                vk::ImageAspectFlags::COLOR,
             );
 
             self.context
@@ -221,13 +196,27 @@ impl Renderer {
                 .end_command_buffer(frame.command_buffer)?;
 
             //submit command buffer
-            self.context.device.queue_submit(
+            // self.context.device.queue_submit(
+            //     self.context.queues[self.context.queue_families.graphics.index as usize],
+            //     &[vk::SubmitInfo::default()
+            //         .command_buffers(&[frame.command_buffer])
+            //         .wait_semaphores(&[frame.image_available_semaphore])
+            //         .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+            //         .signal_semaphores(&[self.render_finished_semaphores[image_index as usize]])],
+            //     frame.in_flight_fence,
+            // )?;
+            self.context.device.queue_submit2(
                 self.context.queues[self.context.queue_families.graphics.index as usize],
-                &[vk::SubmitInfo::default()
-                    .command_buffers(&[frame.command_buffer])
-                    .wait_semaphores(&[frame.image_available_semaphore])
-                    .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
-                    .signal_semaphores(&[self.render_finished_semaphores[image_index as usize]])],
+                &[vk::SubmitInfo2::default()
+                    .command_buffer_infos(&[vk::CommandBufferSubmitInfo::default()
+                        .command_buffer(frame.command_buffer)
+                        .device_mask(1)])
+                    .wait_semaphore_infos(&[vk::SemaphoreSubmitInfo::default()
+                        .semaphore(frame.image_available_semaphore)
+                        .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)])
+                    .signal_semaphore_infos(&[vk::SemaphoreSubmitInfo::default()
+                        .semaphore(self.render_finished_semaphores[image_index as usize])
+                        .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)])],
                 frame.in_flight_fence,
             )?;
 
@@ -241,6 +230,32 @@ impl Renderer {
             //self.frame_index = (self.frame_index + 1) % self.in_flight_frames_count;
 
             Ok(())
+        }
+    }
+    pub fn draw(&self, command_buffer: vk::CommandBuffer) {
+        //draw here
+        unsafe {
+            self.context.device.cmd_set_viewport(
+                command_buffer,
+                0,
+                &[vk::Viewport::default()
+                    .width(self.swapchain.extent.width as f32)
+                    .height(self.swapchain.extent.height as f32)],
+            );
+
+            self.context.device.cmd_set_scissor(
+                command_buffer,
+                0,
+                &[vk::Rect2D::default().extent(self.swapchain.extent)],
+            );
+
+            self.context.device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline,
+            );
+
+            self.context.device.cmd_draw(command_buffer, 3, 1, 0, 0);
         }
     }
 }

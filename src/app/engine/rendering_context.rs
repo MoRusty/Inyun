@@ -3,7 +3,8 @@ use anyhow::Result;
 use ash::ext::debug_utils::Instance as DebugUtils;
 use ash::prelude::VkResult;
 use ash::vk;
-use ash::vk::{ImageView, ShaderModule, SwapchainKHR};
+use ash::vk::{DeviceQueueInfo2, ImageLayout, ImageView, ShaderModule, SwapchainKHR};
+use std::cmp::PartialEq;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::io;
@@ -41,10 +42,21 @@ pub struct PhysicalDevice {
 
 #[derive(Clone, Copy)]
 pub struct ImageLayoutState {
-    pub access_mask: vk::AccessFlags,
+    pub access_mask: vk::AccessFlags2,
     pub layout: vk::ImageLayout,
-    pub stage_mask: vk::PipelineStageFlags,
+    pub stage_mask: vk::PipelineStageFlags2,
     pub queue_family: u32,
+}
+
+impl Default for ImageLayoutState {
+    fn default() -> Self {
+        Self {
+            access_mask: vk::AccessFlags2::NONE,
+            layout: vk::ImageLayout::UNDEFINED,
+            stage_mask: vk::PipelineStageFlags2::ALL_COMMANDS,
+            queue_family: vk::QUEUE_FAMILY_IGNORED,
+        }
+    }
 }
 
 pub struct Surface {
@@ -105,6 +117,12 @@ pub struct RenderingContext {
     pub debug_utils_loader: DebugUtils,
     pub debug_messenger: vk::DebugUtilsMessengerEXT,
     pub attributes: RenderingContextAttributes,
+}
+
+impl PartialEq<vk::ImageLayout> for ImageLayoutState {
+    fn eq(&self, other: &vk::ImageLayout) -> bool {
+        self.layout == *other
+    }
 }
 
 impl RenderingContext {
@@ -237,21 +255,21 @@ impl RenderingContext {
                 })
                 .collect::<Vec<_>>();
 
-            //using dynamic rendering which is now a core feature in Vulkan 1.3 -
-            // todo - research the benefits of dynamic rendering vs traditional render passes and framebuffers, and decide if we want to use it for our renderer,
-            // but for now just enable the feature and use it in the device create info
+            //todo: look into the other features in vulkan 1.2 and .3
             let device = instance.create_device(
                 physical_device.handle,
                 &vk::DeviceCreateInfo::default()
                     .queue_create_infos(&queue_create_infos)
                     .enabled_extension_names(&[ash::khr::swapchain::NAME.as_ptr()])
                     .push_next(
-                        &mut vk::PhysicalDeviceDynamicRenderingFeatures::default()
-                            .dynamic_rendering(true),
+                        &mut vk::PhysicalDeviceVulkan12Features::default()
+                            .buffer_device_address(true)
+                            .descriptor_indexing(true),
                     )
                     .push_next(
-                        &mut vk::PhysicalDeviceBufferDeviceAddressFeatures::default()
-                            .buffer_device_address(true),
+                        &mut vk::PhysicalDeviceVulkan13Features::default()
+                            .dynamic_rendering(true)
+                            .synchronization2(true),
                     ),
                 None,
             )?;
@@ -262,7 +280,7 @@ impl RenderingContext {
                 .iter()
                 .copied()
                 .map(|index| {
-                    device.get_device_queue(index, 0) // get the first queue from each family
+                    device.get_device_queue2(&DeviceQueueInfo2::default().queue_family_index(index)) // get the first queue from each family
                 })
                 .collect::<Vec<_>>();
 
@@ -487,33 +505,38 @@ impl RenderingContext {
         image: vk::Image,
         old_layout: ImageLayoutState,
         new_layout: ImageLayoutState,
-        aspect_mask: vk::ImageAspectFlags,
     ) {
         unsafe {
-            self.device.cmd_pipeline_barrier(
+            let aspect_mask = if new_layout == vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL {
+                vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
+            } else {
+                vk::ImageAspectFlags::COLOR
+            };
+
+            //use cmd_pipeline_barrier2 instead
+            self.device.cmd_pipeline_barrier2(
                 command_buffer,
-                old_layout.stage_mask,
-                new_layout.stage_mask,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[vk::ImageMemoryBarrier::default()
-                    .src_access_mask(old_layout.access_mask)
-                    .dst_access_mask(new_layout.access_mask)
-                    .old_layout(old_layout.layout)
-                    .new_layout(new_layout.layout)
-                    .src_queue_family_index(old_layout.queue_family)
-                    .dst_queue_family_index(new_layout.queue_family)
-                    .image(image)
-                    .subresource_range(
-                        vk::ImageSubresourceRange::default()
-                            .aspect_mask(aspect_mask)
-                            .base_mip_level(0)
-                            .level_count(1)
-                            .base_array_layer(0)
-                            .layer_count(1),
-                    )],
-            )
+                &vk::DependencyInfo::default().image_memory_barriers(&[
+                    vk::ImageMemoryBarrier2::default()
+                        .src_stage_mask(old_layout.stage_mask)
+                        .dst_stage_mask(new_layout.stage_mask)
+                        .src_access_mask(old_layout.access_mask)
+                        .dst_access_mask(new_layout.access_mask)
+                        .old_layout(old_layout.layout)
+                        .new_layout(new_layout.layout)
+                        .src_queue_family_index(old_layout.queue_family)
+                        .dst_queue_family_index(new_layout.queue_family)
+                        .image(image)
+                        .subresource_range(
+                            vk::ImageSubresourceRange::default()
+                                .aspect_mask(aspect_mask)
+                                .base_mip_level(0)
+                                .level_count(1)
+                                .base_array_layer(0)
+                                .layer_count(1),
+                        ),
+                ]),
+            );
         }
     }
 
