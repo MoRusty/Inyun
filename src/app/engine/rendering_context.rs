@@ -1,9 +1,11 @@
-use crate::app::engine::rendering_context;
 use anyhow::Result;
 use ash::ext::debug_utils::Instance as DebugUtils;
-use ash::prelude::VkResult;
 use ash::vk;
-use ash::vk::{DeviceQueueInfo2, ImageLayout, ImageView, ShaderModule, SwapchainKHR};
+use cstr::cstr;
+use gpu_allocator::vulkan::{
+    Allocation, AllocationCreateDesc, AllocationScheme, Allocator, AllocatorCreateDesc,
+};
+use gpu_allocator::{AllocationSizes, AllocatorDebugSettings, MemoryLocation};
 use std::cmp::PartialEq;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
@@ -57,6 +59,23 @@ impl Default for ImageLayoutState {
             queue_family: vk::QUEUE_FAMILY_IGNORED,
         }
     }
+}
+
+pub struct Image {
+    pub handle: vk::Image,
+    pub allocation: Option<Allocation>,
+    pub view: vk::ImageView,
+    pub layout: ImageLayoutState,
+    pub attributes: ImageAttributes,
+}
+
+pub struct ImageAttributes {
+    pub location: MemoryLocation,
+    pub linear: bool,
+    pub allocation_scheme: AllocationScheme,
+    pub extent: vk::Extent3D,
+    pub format: vk::Format,
+    pub usage: vk::ImageUsageFlags,
 }
 
 pub struct Surface {
@@ -280,7 +299,9 @@ impl RenderingContext {
                 .iter()
                 .copied()
                 .map(|index| {
-                    device.get_device_queue2(&DeviceQueueInfo2::default().queue_family_index(index)) // get the first queue from each family
+                    device.get_device_queue2(
+                        &vk::DeviceQueueInfo2::default().queue_family_index(index),
+                    ) // get the first queue from each family
                 })
                 .collect::<Vec<_>>();
 
@@ -326,7 +347,7 @@ impl RenderingContext {
         //todo change it so that the best queue family is used for each type of queue (graphics, present, transfer, compute)
         Ok((
             best_device,
-            rendering_context::QueueFamilies {
+            QueueFamilies {
                 graphics: graphics_family.clone(),
                 present: graphics_family.clone(),
                 transfer: graphics_family.clone(),
@@ -336,36 +357,38 @@ impl RenderingContext {
     }
 
     //get all surface info and store it in struct, saves having the individual functions
-    pub unsafe fn create_surface(&self, window: &Window) -> Result<Surface> {
+    pub fn create_surface(&self, window: &Window) -> Result<Surface> {
         let raw_display_handle = window.display_handle()?.as_raw();
         let raw_window_handle = window.window_handle()?.as_raw();
 
-        let handle = ash_window::create_surface(
-            &self.entry,
-            &self.instance,
-            raw_display_handle,
-            raw_window_handle,
-            None,
-        )?;
+        unsafe {
+            let handle = ash_window::create_surface(
+                &self.entry,
+                &self.instance,
+                raw_display_handle,
+                raw_window_handle,
+                None,
+            )?;
 
-        let capabilities = self
-            .surface_extension
-            .get_physical_device_surface_capabilities(self.physical_device.handle, handle)?;
+            let capabilities = self
+                .surface_extension
+                .get_physical_device_surface_capabilities(self.physical_device.handle, handle)?;
 
-        let formats = self
-            .surface_extension
-            .get_physical_device_surface_formats(self.physical_device.handle, handle)?;
+            let formats = self
+                .surface_extension
+                .get_physical_device_surface_formats(self.physical_device.handle, handle)?;
 
-        let present_modes = self
-            .surface_extension
-            .get_physical_device_surface_present_modes(self.physical_device.handle, handle)?;
+            let present_modes = self
+                .surface_extension
+                .get_physical_device_surface_present_modes(self.physical_device.handle, handle)?;
 
-        Ok(Surface {
-            handle,
-            capabilities,
-            formats,
-            present_modes,
-        })
+            Ok(Surface {
+                handle,
+                capabilities,
+                formats,
+                present_modes,
+            })
+        }
     }
 
     //todo come back to this
@@ -407,7 +430,6 @@ impl RenderingContext {
         &self,
         vertex: vk::ShaderModule,
         fragment: vk::ShaderModule,
-        swapchain_extent: vk::Extent2D,
         swapchain_format: vk::Format,
         pipeline_layout: vk::PipelineLayout,
         pipeline_cache: vk::PipelineCache,
@@ -416,12 +438,12 @@ impl RenderingContext {
         let vertex_stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::VERTEX)
             .module(vertex)
-            .name(CStr::from_bytes_with_nul(b"main\0")?);
+            .name(cstr!("main"));
 
         let fragment_stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::FRAGMENT)
             .module(fragment)
-            .name(CStr::from_bytes_with_nul(b"main\0")?);
+            .name(cstr!("main"));
 
         let stages = [vertex_stage, fragment_stage];
 
@@ -502,7 +524,7 @@ impl RenderingContext {
     pub fn transition_image_layout(
         &self,
         command_buffer: vk::CommandBuffer,
-        image: vk::Image,
+        image: vk::Image, //todo: change this to Image struct rather than vk
         old_layout: ImageLayoutState,
         new_layout: ImageLayoutState,
     ) {
@@ -559,6 +581,191 @@ impl RenderingContext {
                         .load_op(vk::AttachmentLoadOp::CLEAR)
                         .store_op(vk::AttachmentStoreOp::STORE)])
                     .render_area(render_area),
+            );
+        }
+    }
+
+    pub fn create_allocator(
+        &self,
+        debug_settings: AllocatorDebugSettings,
+        allocation_sizes: AllocationSizes,
+    ) -> Result<Allocator> {
+        Ok(Allocator::new(&AllocatorCreateDesc {
+            instance: self.instance.clone(),
+            device: self.device.clone(),
+            physical_device: self.physical_device.handle,
+            debug_settings,
+            buffer_device_address: true, // Ideally, check the BufferDeviceAddressFeatures struct.
+            allocation_sizes,
+        })?)
+    }
+
+    pub fn create_image(
+        //move this to a struct except of name and allocator?
+        &self,
+        name: &str,
+        allocator: &mut Allocator,
+        attributes: ImageAttributes,
+    ) -> Result<Image> {
+        let image_create_info = unsafe {
+            self.device.create_image(
+                &vk::ImageCreateInfo::default()
+                    .image_type(vk::ImageType::TYPE_2D)
+                    .format(attributes.format)
+                    .extent(attributes.extent)
+                    .mip_levels(1)
+                    .array_layers(1)
+                    .samples(vk::SampleCountFlags::TYPE_1)
+                    .initial_layout(vk::ImageLayout::UNDEFINED)
+                    .tiling(vk::ImageTiling::OPTIMAL)
+                    .usage(attributes.usage)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
+                None,
+            )
+        }?;
+
+        let requirements = unsafe { self.device.get_image_memory_requirements(image_create_info) };
+
+        let allocation = allocator.allocate(&AllocationCreateDesc {
+            name,
+            requirements,
+            location: attributes.location,
+            linear: attributes.linear,
+            allocation_scheme: attributes.allocation_scheme,
+        })?;
+
+        unsafe {
+            self.device.bind_image_memory(
+                image_create_info,
+                allocation.memory(),
+                allocation.offset(),
+            )?;
+        }
+
+        let view = self.create_image_view(
+            image_create_info,
+            attributes.format,
+            vk::ImageAspectFlags::COLOR,
+        )?;
+
+        Ok(Image {
+            handle: image_create_info,
+            allocation: Some(allocation), //changed to an Option to allow memory aliasing in the future
+            view,
+            layout: ImageLayoutState {
+                access_mask: vk::AccessFlags2::NONE,
+                layout: vk::ImageLayout::UNDEFINED,
+                stage_mask: vk::PipelineStageFlags2::NONE,
+                queue_family: 0,
+            },
+            attributes,
+        })
+    }
+
+    pub fn destroy_image(&self, image: &mut Image, allocator: &mut Allocator) -> Result<()> {
+        unsafe {
+            self.device.destroy_image_view(image.view, None);
+            if let Some(allocation) = image.allocation.take() {
+                allocator.free(allocation)?;
+            }
+            self.device.destroy_image(image.handle, None);
+        }
+        Ok(())
+    }
+
+    //not in use but might come handy later
+    #[allow(dead_code)]
+    pub fn clear_image(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        image: Image,
+        clear_color: [f32; 4],
+        layout: Option<vk::ImageLayout>, //Optional layout
+    ) {
+        let image_layout = layout.unwrap_or(vk::ImageLayout::GENERAL);
+
+        unsafe {
+            self.device.cmd_clear_color_image(
+                command_buffer,
+                image.handle,
+                image_layout, // Use the provided layout
+                &vk::ClearColorValue {
+                    float32: clear_color,
+                },
+                &[vk::ImageSubresourceRange::default()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(0)
+                    .level_count(1)
+                    .base_array_layer(0)
+                    .layer_count(1)],
+            )
+        }
+    }
+
+    pub fn copy_image(
+        //todo: when i change things to use the Image struct, i will need to change this fn to do the same
+        &self,
+        command_buffer: vk::CommandBuffer,
+        src_image: vk::Image,
+        src_layout: vk::ImageLayout,
+        dst_image: vk::Image,
+        dst_layout: vk::ImageLayout,
+        extent: vk::Extent3D,
+    ) {
+        unsafe {
+            // self.device.cmd_copy_image(
+            //     command_buffer,
+            //     src_image,
+            //     src_layout,
+            //     dst_image,
+            //     dst_layout,
+            //     &[vk::ImageCopy::default()
+            //         .src_subresource(
+            //             vk::ImageSubresourceLayers::default()
+            //                 .aspect_mask(vk::ImageAspectFlags::COLOR)
+            //                 .layer_count(1),
+            //         )
+            //         .dst_subresource(
+            //             vk::ImageSubresourceLayers::default()
+            //                 .aspect_mask(vk::ImageAspectFlags::COLOR)
+            //                 .layer_count(1),
+            //         )
+            //         .extent(extent)],
+            // )
+            self.device.cmd_blit_image2(
+                command_buffer,
+                &vk::BlitImageInfo2::default()
+                    .src_image(src_image)
+                    .src_image_layout(src_layout)
+                    .dst_image(dst_image)
+                    .dst_image_layout(dst_layout)
+                    .regions(&[vk::ImageBlit2::default()
+                        .src_subresource(
+                            vk::ImageSubresourceLayers::default()
+                                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                .layer_count(1),
+                        )
+                        .dst_subresource(
+                            vk::ImageSubresourceLayers::default()
+                                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                .layer_count(1),
+                        )
+                        .src_offsets([
+                            vk::Offset3D { x: 0, y: 0, z: 0 },
+                            vk::Offset3D {
+                                x: extent.width as i32,
+                                y: extent.height as i32,
+                                z: extent.depth as i32,
+                            },
+                        ])
+                        .dst_offsets([
+                            vk::Offset3D { x: 0, y: 0, z: 0 },
+                            vk::Offset3D {
+                                x: extent.width as i32,
+                                y: extent.height as i32,
+                                z: extent.depth as i32,
+                            },
+                        ])]),
             );
         }
     }

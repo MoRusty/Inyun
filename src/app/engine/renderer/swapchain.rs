@@ -16,11 +16,12 @@ pub struct Swapchain {
     window: Arc<Window>,
     context: Arc<RenderingContext>,
     pub is_dirty: bool,
+    pub color_space: vk::ColorSpaceKHR,
 }
 
 impl Swapchain {
     pub fn new(context: Arc<RenderingContext>, window: Arc<Window>) -> Result<Self> {
-        let surface = unsafe { context.create_surface(window.as_ref())? };
+        let surface = context.create_surface(window.as_ref())?;
 
         let (format, color_space) = surface
             .formats
@@ -57,6 +58,7 @@ impl Swapchain {
         Ok(Self {
             desired_image_count,
             format,
+            color_space,
             extent,
             image_views: vec![],
             images: vec![],
@@ -75,14 +77,16 @@ impl Swapchain {
                     .surface(self.surface.handle)
                     .min_image_count(self.desired_image_count)
                     .image_format(self.format)
-                    .image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
+                    .image_color_space(self.color_space)
                     .image_extent(self.extent)
                     .image_array_layers(1)
-                    .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+                    .image_usage(
+                        vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST,
+                    )
                     .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-                    .pre_transform(self.surface.capabilities.current_transform)
+                    .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
                     .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-                    .present_mode(vk::PresentModeKHR::FIFO)
+                    .present_mode(vk::PresentModeKHR::MAILBOX)
                     .clipped(true)
                     .old_swapchain(old_swapchain),
                 None,
