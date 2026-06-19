@@ -10,7 +10,7 @@ pub struct Swapchain {
     pub format: vk::Format,
     pub extent: vk::Extent2D,
     pub image_views: Vec<vk::ImageView>,
-    pub images: Vec<vk::Image>,
+    pub images: Vec<vk::Image>, //swapchain images are a state machine with per index per frame layout so i shouldn't use my own image struct here
     handle: vk::SwapchainKHR,
     surface: Surface,
     window: Arc<Window>,

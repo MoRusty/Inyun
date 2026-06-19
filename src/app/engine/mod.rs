@@ -2,16 +2,16 @@ mod renderer;
 mod rendering_context;
 
 use anyhow::Result;
+use ash::vk;
 use std::{collections::HashMap, sync::Arc};
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowAttributes, WindowId};
 
-use crate::app::engine::renderer::Renderer;
+use crate::app::engine::renderer::window_renderer;
 use crate::app::engine::rendering_context::RenderingContext;
-
 pub struct Engine {
-    renderers: HashMap<WindowId, Renderer>,
+    renderers: HashMap<WindowId, window_renderer::WindowRenderer>,
     windows: HashMap<WindowId, Arc<Window>>,
     primary_window_id: WindowId,
     rendering_context: Arc<RenderingContext>,
@@ -33,10 +33,19 @@ impl Engine {
         let renderers = windows
             .iter()
             .map(|(id, window)| {
-                let renderer = Renderer::new(rendering_context.clone(), window.clone())?;
-                anyhow::Ok((*id, renderer))
+                let renderer = window_renderer::WindowRenderer::new(
+                    rendering_context.clone(),
+                    window.clone(),
+                    2,
+                    vk::Format::R16G16B16A16_SFLOAT,
+                    vk::ClearColorValue {
+                        float32: [0.0, 0.0, 0.0, 0.0],
+                    },
+                )
+                .unwrap();
+                (*id, renderer)
             })
-            .collect::<Result<HashMap<_, _>>>()?;
+            .collect::<HashMap<_, _>>();
 
         Ok(Self {
             renderers,
@@ -60,14 +69,14 @@ impl Engine {
                     self.windows.remove(&window_id);
                 }
             }
-            WindowEvent::Resized(size) => {
+            WindowEvent::Resized(_) => {
                 if let Some(renderer) = self.renderers.get_mut(&window_id) {
-                    renderer.resize().unwrap()
+                    renderer.resize()
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 if let Some(renderer) = self.renderers.get_mut(&window_id) {
-                    renderer.resize().unwrap()
+                    renderer.resize()
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -88,7 +97,15 @@ impl Engine {
         let window = Arc::new(event_loop.create_window(attributes)?);
         let window_id = window.id();
         self.windows.insert(window_id, window.clone());
-        let renderer = Renderer::new(self.rendering_context.clone(), window)?;
+        let renderer = window_renderer::WindowRenderer::new(
+            self.rendering_context.clone(),
+            window.clone(),
+            2,
+            vk::Format::R16G16B16A16_SFLOAT,
+            vk::ClearColorValue {
+                float32: [0.0, 0.0, 0.0, 0.0],
+            },
+        )?;
         self.renderers.insert(window_id, renderer);
         Ok(window_id)
     }

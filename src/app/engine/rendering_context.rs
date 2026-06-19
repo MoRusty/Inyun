@@ -95,7 +95,7 @@ unsafe extern "system" fn vulkan_debug_callback(
         let callback_data = unsafe { &*p_callback_data };
         let message = unsafe {
             if callback_data.p_message.is_null() {
-                CStr::from_bytes_with_nul(b"<no message>\0").unwrap()
+                c"<no message>"
             } else {
                 CStr::from_ptr(callback_data.p_message)
             }
@@ -492,10 +492,7 @@ impl RenderingContext {
 
         //dynamic
         let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
-            .color_attachment_formats(&color_attachment_formats)
-            //.depth_attachment_format(vk::Format::D32_SFLOAT)
-            //.stencil_attachment_format(vk::Format::D32_SFLOAT)
-            ;
+            .color_attachment_formats(&color_attachment_formats);
 
         let pipeline_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&stages)
@@ -702,7 +699,7 @@ impl RenderingContext {
         }
     }
 
-    pub fn copy_image(
+    pub fn blit_image(
         //todo: when i change things to use the Image struct, i will need to change this fn to do the same
         &self,
         command_buffer: vk::CommandBuffer,
