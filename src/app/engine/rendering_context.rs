@@ -614,7 +614,11 @@ impl RenderingContext {
                     .array_layers(1)
                     .samples(vk::SampleCountFlags::TYPE_1)
                     .initial_layout(vk::ImageLayout::UNDEFINED)
-                    .tiling(vk::ImageTiling::OPTIMAL)
+                    .tiling(if attributes.linear {
+                        vk::ImageTiling::LINEAR
+                    } else {
+                        vk::ImageTiling::OPTIMAL
+                    })
                     .usage(attributes.usage)
                     .sharing_mode(vk::SharingMode::EXCLUSIVE),
                 None,

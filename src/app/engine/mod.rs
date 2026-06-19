@@ -30,6 +30,17 @@ impl Engine {
             },
         )?);
 
+        let mut image_renderer = renderer::image_renderer::ImageRenderer::new(
+            rendering_context.clone(),
+            vk::ClearColorValue {
+                float32: [0.0, 0.0, 0.0, 0.0],
+            },
+            (800, 600),
+            vk::Format::R8G8B8A8_UNORM,
+        )?;
+
+        image_renderer.render()?;
+
         let renderers = windows
             .iter()
             .map(|(id, window)| {

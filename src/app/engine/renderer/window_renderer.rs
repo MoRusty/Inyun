@@ -111,7 +111,7 @@ impl WindowRenderer {
             queue_family: vk::QUEUE_FAMILY_IGNORED,
         };
 
-        let transfer_image_state = ImageLayoutState {
+        let transfer_src_image_state = ImageLayoutState {
             layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             access_mask: vk::AccessFlags2::TRANSFER_READ,
             stage_mask: vk::PipelineStageFlags2::TRANSFER,
@@ -164,7 +164,7 @@ impl WindowRenderer {
                 frame.command_buffer,
                 self.renderer.render_target.handle,
                 self.renderer.render_target.layout,
-                transfer_image_state,
+                transfer_src_image_state,
             );
 
             //transition swapchain image layout from undefined to transfer
@@ -182,7 +182,7 @@ impl WindowRenderer {
             self.context.blit_image(
                 frame.command_buffer,
                 self.renderer.render_target.handle,
-                transfer_image_state.layout,
+                transfer_src_image_state.layout,
                 self.swapchain.images[image_index as usize],
                 transfer_dst_image_state.layout,
                 self.renderer.render_target.attributes.extent,

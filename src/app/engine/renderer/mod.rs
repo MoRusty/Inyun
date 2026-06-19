@@ -1,4 +1,5 @@
 //todo: go back over the wait - signal semaphoes. make sure the correct stage mask is set.
+pub(crate) mod image_renderer;
 mod swapchain;
 pub mod window_renderer;
 
